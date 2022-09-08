@@ -428,8 +428,10 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 
 	stype := storageTypeNormal
 	writeType := o.getWritableType(ctx, parentID, info)
+	log.G(ctx).Debugf("[!] 1")
 	// If Preparing for rootfs, find metadata from its parent (top layer), launch and mount backstore device.
 	if _, ok := info.Labels[labelKeyTargetSnapshotRef]; !ok {
+		log.G(ctx).Debugf("[!] 2")
 		if writeType != roDir {
 			stype = storageTypeLocalBlock
 			if err := o.constructOverlayBDSpec(ctx, key, true); err != nil {
@@ -441,6 +443,7 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 				return nil, err
 			}
 		}
+		log.G(ctx).Debugf("[!] 3:%d", stype)
 		switch stype {
 		case storageTypeLocalBlock, storageTypeRemoteBlock:
 			if parent != "" {
@@ -565,7 +568,7 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, er
 		if writeType != roDir {
 			return o.basedOnBlockDeviceMount(ctx, s, writeType)
 		}
-
+		log.G(ctx).Debugf("[!] RemoteBlock: %s", s.ID)
 		parentID, parentInfo, _, err := storage.GetInfo(ctx, info.Parent)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to get info of parent snapshot %s", info.Parent)
@@ -577,6 +580,7 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, er
 		}
 
 		if parentStype == storageTypeRemoteBlock || parentStype == storageTypeLocalBlock {
+			log.G(ctx).Debugf("[!] BDMount")
 			fsType, ok := parentInfo.Labels[labelKeyOverlayBDBlobFsType]
 			if !ok {
 				fsType = "ext4"
@@ -584,6 +588,7 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, er
 			if err := o.attachAndMountBlockDevice(ctx, parentID, roDir, fsType, false); err != nil {
 				return nil, errors.Wrapf(err, "failed to attach and mount for snapshot %v", key)
 			}
+			log.G(ctx).Debugf("[!] basedOnBlockDeviceMount: %s", s)
 			return o.basedOnBlockDeviceMount(ctx, s, roDir)
 		}
 	}
@@ -620,6 +625,7 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 		if oinfo.Labels[labelKeyAccelerationLayer] == "yes" {
 			log.G(ctx).Info("Commit accel-layer requires no writable_data")
 		} else {
+			log.G(ctx).Debugf("[!] RWlayer in Commit(%s)", id)
 			if err := o.unmountAndDetachBlockDevice(ctx, id, key); err != nil {
 				return errors.Wrapf(err, "failed to destroy target device for snapshot %s", key)
 			}
@@ -627,6 +633,7 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 			if err := o.commitWritableOverlaybd(ctx, id); err != nil {
 				return err
 			}
+			log.G(ctx).Debugf("[!] overlaybd.commit generated")
 
 			defer func() {
 				if retErr != nil {
@@ -815,6 +822,7 @@ func (o *snapshotter) basedOnBlockDeviceMount(ctx context.Context, s storage.Sna
 		}, nil
 	}
 	if writeType == rwDev {
+		log.G(ctx).Debugf("[!] rwdev")
 		devName, err := ioutil.ReadFile(o.overlaybdBackstoreMarkFile(s.ID))
 		if err != nil {
 			return nil, err
@@ -997,6 +1005,7 @@ func (o *snapshotter) identifySnapshotStorageType(ctx context.Context, id string
 
 		if hasBDBlobSize && hasBDBlobDigest {
 			if hasRef || hasCriRef {
+				log.G(ctx).Debugf("[!] identify: RemoteBlock")
 				return storageTypeRemoteBlock, nil
 			}
 		}
@@ -1015,8 +1024,10 @@ func (o *snapshotter) identifySnapshotStorageType(ctx context.Context, id string
 	filePath = o.overlaybdWritableDataPath(id)
 	st, err = o.identifyLocalStorageType(filePath)
 	if err != nil && os.IsNotExist(err) {
+		log.G(ctx).Debugf("[!] check")
 		return storageTypeNormal, nil
 	}
+	log.G(ctx).Debugf("[!] check2: %v", st)
 	return st, err
 }
 

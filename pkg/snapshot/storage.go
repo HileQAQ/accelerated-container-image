@@ -362,11 +362,13 @@ func (o *snapshotter) attachAndMountBlockDevice(ctx context.Context, snID string
 // constructOverlayBDSpec generates the config spec for overlaybd target.
 func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, writable bool) error {
 	id, info, _, err := storage.GetInfo(ctx, key)
+	log.G(ctx).Debugf("[!] constructOverlayBDSpec: %s, %t", id, writable)
 	if err != nil {
 		return errors.Wrapf(err, "failed to get info for snapshot %s", key)
 	}
 
 	stype, err := o.identifySnapshotStorageType(ctx, id, info)
+	log.G(ctx).Debugf("[!] stype: %d", stype)
 	if err != nil {
 		return errors.Wrapf(err, "failed to identify storage of snapshot %s", key)
 	}
@@ -393,6 +395,7 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 
 	switch stype {
 	case storageTypeRemoteBlock:
+		log.G(ctx).Debugf("[!] RemoteBlock")
 		if writable {
 			return errors.Errorf("remote block device is readonly, not support writable")
 		}
@@ -447,6 +450,7 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 			Data:  o.overlaybdWritableDataPath(id),
 		}
 	}
+	log.G(ctx).Debugf("[!] write config: %s", id)
 	return o.atomicWriteOverlaybdTargetConfig(id, &configJSON)
 }
 
@@ -527,6 +531,7 @@ func (o *snapshotter) atomicWriteOverlaybdTargetConfig(snID string, configJSON *
 
 // prepareWritableOverlaybd
 func (o *snapshotter) prepareWritableOverlaybd(ctx context.Context, snID string) error {
+	log.G(ctx).Debugf("[!] prepare Writable")
 	binpath := filepath.Join(o.config.OverlayBDUtilBinDir, "overlaybd-create")
 
 	// TODO(fuweid): 256GB can be configurable?
@@ -541,6 +546,7 @@ func (o *snapshotter) prepareWritableOverlaybd(ctx context.Context, snID string)
 
 // commitWritableOverlaybd
 func (o *snapshotter) commitWritableOverlaybd(ctx context.Context, snID string) (retErr error) {
+	log.G(ctx).Debugf("[!] commit Writable")
 	binpath := filepath.Join(o.config.OverlayBDUtilBinDir, "overlaybd-commit")
 
 	out, err := exec.CommandContext(ctx, binpath, "-z",
