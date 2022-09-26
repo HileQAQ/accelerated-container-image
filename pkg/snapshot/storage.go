@@ -392,17 +392,26 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 	}
 
 	switch stype {
-	case storageTypeRemoteBlock:
+	case storageTypeLocalBlock, storageTypeRemoteBlock:
 		if writable {
-			return errors.Errorf("remote block device is readonly, not support writable")
+			return errors.Errorf("block device is readonly, not support writable")
 		}
 
-		blobSize, err := strconv.Atoi(info.Labels[labelKeyOverlayBDBlobSize])
+		bdSize, hasBDBlobSize := info.Labels[labelKeyOverlayBDBlobSize]
+		blobDigest, hasBDBlobDigest := info.Labels[labelKeyOverlayBDBlobDigest]
+
+		if !hasBDBlobSize || !hasBDBlobDigest {
+			configJSON.Lowers = append(configJSON.Lowers, OverlayBDBSConfigLower{
+				Dir: o.upperPath(id),
+			})
+			break
+		}
+
+		blobSize, err := strconv.Atoi(bdSize)
 		if err != nil {
 			return errors.Wrapf(err, "failed to parse value of label %s of snapshot %s", labelKeyOverlayBDBlobSize, key)
 		}
 
-		blobDigest := info.Labels[labelKeyOverlayBDBlobDigest]
 		ref, hasRef := info.Labels[labelKeyImageRef]
 		if !hasRef {
 			criRef, hasCriRef := info.Labels[labelKeyCriImageRef]
@@ -422,15 +431,6 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 			Digest: blobDigest,
 			Size:   int64(blobSize),
 			Dir:    o.upperPath(id),
-		})
-
-	case storageTypeLocalBlock:
-		if writable {
-			return errors.Errorf("local block device is readonly, not support writable")
-		}
-
-		configJSON.Lowers = append(configJSON.Lowers, OverlayBDBSConfigLower{
-			Dir: o.upperPath(id),
 		})
 
 	default:

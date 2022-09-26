@@ -615,7 +615,8 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 	}
 
 	// if writable, should commit the data and make it immutable.
-	if _, writableBD := oinfo.Labels[LabelSupportReadWriteMode]; writableBD {
+	writeType := o.getWritableType(ctx, id, oinfo)
+	if writeType == rwDir || writeType == rwDev {
 		// TODO(fuweid): how to rollback?
 		if oinfo.Labels[labelKeyAccelerationLayer] == "yes" {
 			log.G(ctx).Info("Commit accel-layer requires no writable_data")
@@ -772,24 +773,22 @@ func (o *snapshotter) prepareDirectory(ctx context.Context, snapshotDir string, 
 		return td, err
 	}
 
-	if kind == snapshots.KindActive {
-		if err := os.Mkdir(filepath.Join(td, "work"), 0711); err != nil {
-			return td, err
-		}
+	if err := os.Mkdir(filepath.Join(td, "work"), 0711); err != nil {
+		return td, err
+	}
 
-		if err := os.Mkdir(filepath.Join(td, "block"), 0711); err != nil {
-			return td, err
-		}
+	if err := os.Mkdir(filepath.Join(td, "block"), 0711); err != nil {
+		return td, err
+	}
 
-		if err := os.Mkdir(filepath.Join(td, "block", "mountpoint"), 0711); err != nil {
-			return td, err
-		}
+	if err := os.Mkdir(filepath.Join(td, "block", "mountpoint"), 0711); err != nil {
+		return td, err
+	}
 
-		f, err := os.Create(filepath.Join(td, "block", "init-debug.log"))
-		f.Close()
-		if err != nil {
-			return td, err
-		}
+	f, err := os.Create(filepath.Join(td, "block", "init-debug.log"))
+	f.Close()
+	if err != nil {
+		return td, err
 	}
 	return td, nil
 }
