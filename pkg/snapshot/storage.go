@@ -167,6 +167,8 @@ func (o *snapshotter) attachAndMountBlockDevice(ctx context.Context, snID string
 	}
 
 	err = ioutil.WriteFile(path.Join(targetPath, "enable"), ([]byte)("1"), 0666)
+	log.G(ctx).Debugf("[!] target: %s, err: %s", targetPath, err)
+	
 	if err != nil {
 		// read the init-debug.log for readable
 		debugLogPath := o.overlaybdInitDebuglogPath(snID)
@@ -428,12 +430,16 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 		})
 
 	case storageTypeLocalBlock:
+		log.G(ctx).Debugf("[!] id: %s, info: %+v", id, info)
 		if writable {
 			return errors.Errorf("local block device is readonly, not support writable")
 		}
 
 		configJSON.Lowers = append(configJSON.Lowers, OverlayBDBSConfigLower{
 			Dir: o.upperPath(id),
+			//[!]
+			Digest: "sha256:66abb49628a6a3a421d80e746cd63aa4d5ced365281e1351e6e1d953dfea70a3",
+			Size: 114,
 		})
 
 	default:
@@ -450,7 +456,7 @@ func (o *snapshotter) constructOverlayBDSpec(ctx context.Context, key string, wr
 			Data:  o.overlaybdWritableDataPath(id),
 		}
 	}
-	log.G(ctx).Debugf("[!] write config: %s", id)
+	// log.G(ctx).Debugf("[!] write config: %s, config: %+v", id, configJSON)
 	return o.atomicWriteOverlaybdTargetConfig(id, &configJSON)
 }
 

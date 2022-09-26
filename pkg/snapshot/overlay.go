@@ -242,7 +242,8 @@ func (o *snapshotter) Stat(ctx context.Context, key string) (snapshots.Info, err
 	}
 	defer t.Rollback()
 
-	_, info, _, err := storage.GetInfo(ctx, key)
+	id, info, _, err := storage.GetInfo(ctx, key)
+	log.G(ctx).Debugf("[!] [Stat] id: %s, info: %+v", id, info)
 	if err != nil {
 		return snapshots.Info{}, err
 	}
@@ -332,7 +333,7 @@ func (o *snapshotter) getWritableType(ctx context.Context, id string, info snaps
 }
 
 func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind, key string, parent string, opts ...snapshots.Opt) (_ []mount.Mount, retErr error) {
-
+	log.G(ctx).Debugf("[!] createMountPoint opts: %+v", opts)
 	ctx, t, err := o.ms.TransactionContext(ctx, true)
 	if err != nil {
 		return nil, err
@@ -348,6 +349,7 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 	}()
 
 	id, info, err := o.createSnapshot(ctx, kind, key, parent, opts)
+	log.G(ctx).Debugf("[!] id: %s, parent: %s, info: %+v", id, parent, info)
 	if err != nil {
 		return nil, err
 	}
@@ -425,13 +427,13 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 			return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", targetRef)
 		}
 	}
-
+	log.G(ctx).Debugf("[!] id: %s, info: %+v", id, info)
 	stype := storageTypeNormal
 	writeType := o.getWritableType(ctx, parentID, info)
 	log.G(ctx).Debugf("[!] 1")
 	// If Preparing for rootfs, find metadata from its parent (top layer), launch and mount backstore device.
 	if _, ok := info.Labels[labelKeyTargetSnapshotRef]; !ok {
-		log.G(ctx).Debugf("[!] 2")
+		log.G(ctx).Debugf("[!] 2: %d", writeType)
 		if writeType != roDir {
 			stype = storageTypeLocalBlock
 			if err := o.constructOverlayBDSpec(ctx, key, true); err != nil {
@@ -465,8 +467,15 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 					err = o.updateSpec(parentID, false, recordTracePath)
 				} else {
 					// For the compatibility of images which have no accel layer
+					log.G(ctx).Debugf("[!] parentID: %s", parentID)
 					err = o.updateSpec(parentID, false, "")
 				}
+				// [!]
+				bscfg, _ := o.loadBackingStoreConfig(id)
+				log.G(ctx).Debugf("[!] id: %s, config: %+v", id, bscfg)
+				bscfg, _ = o.loadBackingStoreConfig(parentID)
+				log.G(ctx).Debugf("[!] pid: %s, config: %+v", parentID, bscfg)
+				// 
 				if err != nil {
 					return nil, errors.Wrapf(err, "updateSpec failed for snapshot %s", parentID)
 				}
@@ -529,13 +538,13 @@ func (o *snapshotter) createMountPoint(ctx context.Context, kind snapshots.Kind,
 
 // Prepare creates an active snapshot identified by key descending from the provided parent.
 func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...snapshots.Opt) (_ []mount.Mount, retErr error) {
-
 	return o.createMountPoint(ctx, snapshots.KindActive, key, parent, opts...)
 }
 
 // View returns a readonly view on parent snapshotter.
 func (o *snapshotter) View(ctx context.Context, key, parent string, opts ...snapshots.Opt) (_ []mount.Mount, retErr error) {
 	log.G(ctx).Debugf("View (key: %s, parent: %s)", key, parent)
+	opts = append(opts, snapshots.WithLabels(map[string]string{"action":"view"}))
 
 	return o.createMountPoint(ctx, snapshots.KindView, key, parent, opts...)
 }
@@ -615,13 +624,16 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 	}()
 
 	id, oinfo, _, err := storage.GetInfo(ctx, key)
+	log.G(ctx).Debugf("[!] [o.Commit] id: %s, oinfo: %+v", id, oinfo)
 	if err != nil {
 		return errors.Wrapf(err, "failed to get info of snapshot %s", key)
 	}
 
 	// if writable, should commit the data and make it immutable.
-	if _, writableBD := oinfo.Labels[LabelSupportReadWriteMode]; writableBD {
+	writeType := o.getWritableType(ctx, id, oinfo)
+	if writeType == rwDir || writeType == rwDev {
 		// TODO(fuweid): how to rollback?
+		log.G(ctx).Debugf("[!] writableBD")
 		if oinfo.Labels[labelKeyAccelerationLayer] == "yes" {
 			log.G(ctx).Info("Commit accel-layer requires no writable_data")
 		} else {
@@ -645,11 +657,14 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 				os.Remove(o.overlaybdWritableIndexPath(id))
 			}()
 
-			opts = append(opts, snapshots.WithLabels(map[string]string{LabelLocalOverlayBDPath: o.magicFilePath(id)}))
+			opts = append(opts, snapshots.WithLabels(map[string]string{
+				LabelLocalOverlayBDPath: o.magicFilePath(id)
+			}))
 		}
 	}
 
 	id, info, err := o.commit(ctx, name, key, opts...)
+	log.G(ctx).Debugf("[!] [o.commit] id: %s, info: %+v", id, info)
 	if err != nil {
 		return err
 	}
@@ -665,7 +680,7 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 		if err := o.constructOverlayBDSpec(ctx, name, false); err != nil {
 			return errors.Wrapf(err, "failed to construct overlaybd config")
 		}
-
+		log.G(ctx).Debugf("[!] initLabels")
 		if info.Labels == nil {
 			info.Labels = make(map[string]string)
 		}
@@ -717,6 +732,7 @@ func (o *snapshotter) Remove(ctx context.Context, key string) (err error) {
 
 	rollback := true
 	id, info, _, err := storage.GetInfo(ctx, key)
+	log.G(ctx).Debugf("[!] id: %s, info: %+v", id, info)
 	if err != nil {
 		return err
 	}
@@ -759,7 +775,7 @@ func (o *snapshotter) Remove(ctx context.Context, key string) (err error) {
 
 // Walk the snapshots.
 func (o *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...string) error {
-	log.G(ctx).Debugf("Walk (fs: %s)", fs)
+	log.G(ctx).Debugf("Walk (fs: %s, fn: %+v)", fs, fn)
 
 	ctx, t, err := o.ms.TransactionContext(ctx, false)
 	if err != nil {
@@ -771,6 +787,7 @@ func (o *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...str
 
 func (o *snapshotter) prepareDirectory(ctx context.Context, snapshotDir string, kind snapshots.Kind) (string, error) {
 	td, err := ioutil.TempDir(snapshotDir, "new-")
+	log.G(ctx).Debugf("[!] prepareDir(snapshotDir: %s, td: %s)", snapshotDir, td)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to create temp dir")
 	}
@@ -779,7 +796,7 @@ func (o *snapshotter) prepareDirectory(ctx context.Context, snapshotDir string, 
 		return td, err
 	}
 
-	if kind == snapshots.KindActive {
+	// if kind == snapshots.KindActive {
 		if err := os.Mkdir(filepath.Join(td, "work"), 0711); err != nil {
 			return td, err
 		}
@@ -797,7 +814,7 @@ func (o *snapshotter) prepareDirectory(ctx context.Context, snapshotDir string, 
 		if err != nil {
 			return td, err
 		}
-	}
+	// }
 	return td, nil
 }
 
@@ -943,6 +960,7 @@ func (o *snapshotter) normalOverlayMount(s storage.Snapshot) []mount.Mount {
 }
 
 func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, key, parent string, opts []snapshots.Opt) (_ string, _ snapshots.Info, err error) {
+	log.G(ctx).Debugf("[!] createSn(key: %s, parent: %s)", key, parent)
 	var td, path string
 	defer func() {
 		if err != nil {
@@ -970,9 +988,10 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 	if err != nil {
 		return "", snapshots.Info{}, errors.Wrap(err, "failed to create snapshot")
 	}
-
+	log.G(ctx).Debugf("[!] snapshot: %+v", s)
 	if len(s.ParentIDs) > 0 {
 		st, err := os.Stat(o.upperPath(s.ParentIDs[0]))
+		log.G(ctx).Debugf("[!] stat: %+v", st)
 		if err != nil {
 			return "", snapshots.Info{}, errors.Wrap(err, "failed to stat parent")
 		}
@@ -990,9 +1009,23 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 	td = ""
 
 	id, info, _, err := storage.GetInfo(ctx, key)
+	log.G(ctx).Debugf("[!] id: %s, info: %+v", id, info)
 	if err != nil {
 		return "", snapshots.Info{}, errors.Wrap(err, "failed to get snapshot info")
 	}
+
+	// [!] try a try
+	// if kind == snapshots.KindView {
+	// 	err = o.commitWritableOverlaybd(ctx, "9")
+	// 	if err != nil {
+	// 		return "", snapshots.Info{}, errors.Wrap(err, "failed to create overlaybd.commit")
+	// 	}
+	// 	_, err := exec.CommandContext(ctx, "mv", o.magicFilePath("9"), o.magicFilePath(id)).CombinedOutput()
+	// 	if err != nil {
+	// 		return "", snapshots.Info{}, errors.Wrap(err, "failed to move overlaybd.commit,")
+	// 	}
+	// }
+
 	return id, info, nil
 }
 
