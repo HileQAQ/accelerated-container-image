@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/containerd/containerd"
+	obdconv "github.com/containerd/accelerated-container-image/pkg/convertor"
 	"github.com/containerd/containerd/cmd/ctr/commands"
 	"github.com/containerd/containerd/cmd/ctr/commands/tasks"
 	"github.com/containerd/containerd/containers"
@@ -401,7 +402,7 @@ func (w *countingWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-func duplicateTopLayerWithTrace(ctx context.Context, cs content.Store, imgManifest ocispec.Manifest, traceFile string) (l layer, err error) {
+func duplicateTopLayerWithTrace(ctx context.Context, cs content.Store, imgManifest ocispec.Manifest, traceFile string) (l obdconv.Layer, err error) {
 	configData, err := content.ReadBlob(ctx, cs, imgManifest.Config)
 	if err != nil {
 		return emptyLayer, err
@@ -497,15 +498,15 @@ func duplicateTopLayerWithTrace(ctx context.Context, cs content.Store, imgManife
 		}
 	}
 
-	l = layer{
-		desc: ocispec.Descriptor{
+	l = obdconv.NewLayer(
+		ocispec.Descriptor{
 			MediaType:   images.MediaTypeDockerSchema2LayerGzip,
 			Digest:      tarGzipDigester.Digest(),
 			Size:        tarGzipCountingWriter.count,
 			Annotations: annotationsCopy,
 		},
-		diffID: tarDigester.Digest(),
-	}
+		tarDigester.Digest(),
+	)
 	return l, nil
 }
 
@@ -595,7 +596,7 @@ func duplicateTopLayerWithTrace(ctx context.Context, cs content.Store, imgManife
 //	return l, nil
 //}
 
-func createImageWithNewTopLayer(ctx context.Context, cs content.Store, oldManifest ocispec.Manifest, l layer) (ocispec.Descriptor, error) {
+func createImageWithNewTopLayer(ctx context.Context, cs content.Store, oldManifest ocispec.Manifest, l obdconv.Layer) (ocispec.Descriptor, error) {
 	oldConfigData, err := content.ReadBlob(ctx, cs, oldManifest.Config)
 	if err != nil {
 		return emptyDesc, err
@@ -614,7 +615,8 @@ func createImageWithNewTopLayer(ctx context.Context, cs content.Store, oldManife
 	if !ok {
 		return emptyDesc, errors.New("failed to parse diff_ids")
 	}
-	diffIds[len(diffIds)-1] = l.diffID.String()
+	layerDesc, layerDiffID := l.GetInfo()
+	diffIds[len(diffIds)-1] = layerDiffID.String()
 
 	newConfigData, err := json.MarshalIndent(oldConfig, "", "   ")
 	if err != nil {
@@ -634,7 +636,7 @@ func createImageWithNewTopLayer(ctx context.Context, cs content.Store, oldManife
 	newManifest := ocispec.Manifest{}
 	newManifest.SchemaVersion = oldManifest.SchemaVersion
 	newManifest.Config = newConfigDesc
-	newManifest.Layers = append(oldManifest.Layers[:len(oldManifest.Layers)-1], l.desc)
+	newManifest.Layers = append(oldManifest.Layers[:len(oldManifest.Layers)-1], layerDesc)
 
 	// V2 manifest is not adopted in OCI spec yet, so follow the docker registry V2 spec here
 	var newManifestV2 = struct {
