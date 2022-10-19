@@ -1,4 +1,4 @@
-module github.com/containerd/accelerated-container-image
+module github.com/HileQAQ/accelerated-container-image
 
 go 1.16
 
